@@ -43,17 +43,21 @@ const Checkout = () => {
 
   // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
   useEffect(() => {
-    const isPaymentRoute = location.pathname.startsWith('/pagamento/');
+    const isPaymentReturn = location.search.includes('status=');
     
-    if (items.length === 0 && !orderProcessed && !isPaymentRoute) {
+    // Se o carrinho estiver vazio e não for um retorno de pagamento, redireciona.
+    if (items.length === 0 && !orderProcessed && !isPaymentReturn) {
       toast.info('Por favor, revise seu carrinho e endereço de entrega.');
-      navigate('/carrinho');
+      navigate('/cardapio');
+      return;
     }
-    if ((!deliveryDetails || deliveryFee === undefined || deliveryFee === null) && !orderProcessed && !isPaymentRoute) {
+    
+    // Se estiver na tela de checkout principal e faltarem detalhes, redireciona.
+    if (location.pathname === '/checkout' && items.length > 0 && (!deliveryDetails || deliveryFee === undefined || deliveryFee === null)) {
         toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
         navigate('/carrinho');
     }
-  }, [items, navigate, deliveryDetails, deliveryFee, orderProcessed, location.pathname]);
+  }, [items, navigate, deliveryDetails, deliveryFee, orderProcessed, location.search, location.pathname]);
 
   const constructFullAddress = (details?: typeof deliveryDetails) => {
     if (!details) return '';
@@ -63,39 +67,63 @@ const Checkout = () => {
 
   // Função para enviar os detalhes do pedido para o backend
   const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string) => {
-    if (!deliveryDetails || deliveryFee === null) {
+    // Usamos localStorage para persistir os detalhes do pedido e do pagador
+    const storedDetails = localStorage.getItem('checkoutDetails');
+    const storedPayer = localStorage.getItem('payerDetails');
+    
+    let currentDeliveryDetails = deliveryDetails;
+    let currentDeliveryFee = deliveryFee;
+    let currentPayerName = payerName;
+    let currentPayerEmail = payerEmail;
+
+    if (storedDetails) {
+        const parsedDetails = JSON.parse(storedDetails);
+        currentDeliveryDetails = parsedDetails.deliveryDetails;
+        currentDeliveryFee = parsedDetails.deliveryFee;
+    }
+    if (storedPayer) {
+        const parsedPayer = JSON.parse(storedPayer);
+        currentPayerName = parsedPayer.name;
+        currentPayerEmail = parsedPayer.email;
+    }
+
+    if (!currentDeliveryDetails || currentDeliveryFee === null) {
+        // Se não houver detalhes persistidos, não podemos processar o pedido.
         toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
+        setPaymentStatus('failed');
         return;
     }
 
     const orderDetails = {
         items: items,
-        deliveryDetails: deliveryDetails,
-        deliveryFee: deliveryFee,
+        deliveryDetails: currentDeliveryDetails,
+        deliveryFee: currentDeliveryFee,
         totalPrice: totalPrice,
-        totalWithDelivery: totalWithDelivery,
+        totalWithDelivery: totalPrice + (currentDeliveryFee || 0),
         paymentMethod: paymentMethodUsed,
-        payerName: payerName,
-        payerEmail: payerEmail,
-        paymentId: paymentId, // Passa paymentId
+        payerName: currentPayerName,
+        payerEmail: currentPayerEmail,
+        paymentId: paymentId,
         orderDate: new Date().toISOString(),
     };
 
     try {
         await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
         
-        // *** AVISO DE SUCESSO AQUI ***
+        // Notificação de sucesso
         toast.success('Pagamento Aprovado! Seu pedido está sendo preparado.');
         
         setPaymentStatus('success');
-        setOrderProcessed(true); // Marca como processado
+        setOrderProcessed(true);
         clearCart();
+        localStorage.removeItem('checkoutDetails');
+        localStorage.removeItem('payerDetails');
     } catch (error) {
         console.error('Erro ao confirmar pedido no backend:', error);
         toast.error('Ocorreu um erro ao finalizar seu pedido. Por favor, entre em contato.');
         setPaymentStatus('failed');
     }
-  }, [items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, payerName, payerEmail, clearCart]);
+  }, [items, deliveryDetails, deliveryFee, totalPrice, payerName, payerEmail, clearCart]);
 
   // Efeito para lidar com o retorno do Mercado Pago
   useEffect(() => {
@@ -103,32 +131,36 @@ const Checkout = () => {
     const status = query.get('status');
     const paymentId = query.get('payment_id');
 
-    if (location.pathname.startsWith('/checkout')) {
-        // Limpa o status se o usuário voltar para a tela de checkout principal
-        if (paymentStatus !== 'idle' && !orderProcessed) {
-            setPaymentStatus('idle');
+    if (status && !orderProcessed) {
+        if (status === 'approved' && paymentId) {
+            // Pagamento Aprovado
+            setPaymentStatus('processing');
+            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
+        } else if (status === 'pending') {
+            // Pagamento Pendente
+            if (paymentStatus !== 'pending') {
+                toast.info('Seu pagamento está pendente. Aguardando confirmação.');
+                setPaymentStatus('pending');
+            }
+        } else if (status === 'rejected') {
+            // Pagamento Recusado
+            if (paymentStatus !== 'failed') {
+                toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
+                setPaymentStatus('failed');
+            }
         }
-        return;
     }
+  }, [location.search, sendOrderToBackend, orderProcessed, paymentStatus]);
 
-    if (status === 'approved' && paymentId && !orderProcessed) {
-        // Pagamento Aprovado
-        setPaymentStatus('processing');
-        sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
-    } else if (status === 'pending') {
-        // Pagamento Pendente
-        if (paymentStatus !== 'pending') {
-            toast.info('Seu pagamento está pendente. Aguardando confirmação.');
-            setPaymentStatus('pending');
-        }
-    } else if (status === 'rejected') {
-        // Pagamento Recusado
-        if (paymentStatus !== 'failed') {
-            toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-            setPaymentStatus('failed');
-        }
+  // Efeito para persistir dados do checkout antes de redirecionar para o MP
+  useEffect(() => {
+    if (deliveryDetails && deliveryFee !== undefined && deliveryFee !== null) {
+        localStorage.setItem('checkoutDetails', JSON.stringify({ deliveryDetails, deliveryFee }));
     }
-  }, [location.search, location.pathname, navigate, sendOrderToBackend, orderProcessed, paymentStatus]);
+    if (payerName.trim() && payerEmail.trim()) {
+        localStorage.setItem('payerDetails', JSON.stringify({ name: payerName, email: payerEmail }));
+    }
+  }, [deliveryDetails, deliveryFee, payerName, payerEmail]);
 
 
   const handleCheckoutProPayment = async () => {
@@ -171,7 +203,8 @@ const Checkout = () => {
         });
 
         if (response.data && response.data.init_point) {
-            window.location.href = response.data.init_point; // Redireciona para o Mercado Pago
+            // Redireciona para o Mercado Pago
+            window.location.href = response.data.init_point; 
         } else {
             throw new Error('URL de pagamento do Mercado Pago não recebida.');
         }
@@ -238,46 +271,48 @@ const Checkout = () => {
     );
   };
 
-  // Se o pagamento foi um sucesso (após retorno do MP e processamento do backend)
-  if (paymentStatus === 'success' || orderProcessed) {
+  // Verifica o status de pagamento da URL
+  const query = new URLSearchParams(location.search);
+  const urlStatus = query.get('status');
+
+  if (paymentStatus === 'success' || orderProcessed || urlStatus === 'approved') {
     return renderStatusScreen('success');
   }
   
-  // Se o status for falha ou pendente (após retorno do MP)
-  if (paymentStatus === 'failed' || location.search.includes('status=rejected')) {
+  if (paymentStatus === 'failed' || urlStatus === 'rejected') {
     return renderStatusScreen('failed');
   }
   
-  if (paymentStatus === 'pending' || location.search.includes('status=pending')) {
+  if (paymentStatus === 'pending' || urlStatus === 'pending') {
     return renderStatusScreen('pending');
   }
 
 
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
     // Se estivermos em uma rota de pagamento, mas sem detalhes de entrega (ex: recarregou a página), 
-    // podemos mostrar uma mensagem de erro ou redirecionar.
-    if (location.pathname.startsWith('/pagamento/')) {
-        return renderStatusScreen('failed');
+    // e não houver status na URL, mostramos a tela de carregamento/erro.
+    if (items.length > 0) {
+        return (
+            <div className="min-h-screen flex flex-col">
+                <Header />
+                <main className="flex-1 flex items-center justify-center">
+                <div className="text-center py-20">
+                    <Loader2 className="w-24 h-24 mx-auto text-primary animate-spin mb-6" />
+                    <h2 className="text-3xl font-bold mb-4">Carregando detalhes do pedido...</h2>
+                    <p className="text-muted-foreground mb-8">
+                    Se o carregamento demorar, por favor, retorne ao carrinho.
+                    </p>
+                    <Button onClick={() => navigate('/carrinho')} variant="hero" size="lg">
+                    Voltar para o Carrinho
+                    </Button>
+                </div>
+                </main>
+                <Footer />
+            </div>
+        );
     }
-    
-    return (
-      <div className="min-h-screen flex flex-col">
-        <Header />
-        <main className="flex-1 flex items-center justify-center">
-          <div className="text-center py-20">
-            <Loader2 className="w-24 h-24 mx-auto text-primary animate-spin mb-6" />
-            <h2 className="text-3xl font-bold mb-4">Carregando detalhes do pedido...</h2>
-            <p className="text-muted-foreground mb-8">
-              Se o carregamento demorar, por favor, retorne ao carrinho.
-            </p>
-            <Button onClick={() => navigate('/carrinho')} variant="hero" size="lg">
-              Voltar para o Carrinho
-            </Button>
-          </div>
-        </main>
-        <Footer />
-      </div>
-    );
+    // Se o carrinho estiver vazio e não houver status na URL, o useEffect já redirecionou.
+    return null;
   }
 
   const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
