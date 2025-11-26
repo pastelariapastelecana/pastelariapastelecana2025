@@ -88,8 +88,6 @@ const Checkout = () => {
     }
     
     if (location.pathname === '/checkout' && items.length > 0 && (!deliveryDetails || deliveryFee === undefined || deliveryFee === null)) {
-        // Se os dados ainda não foram carregados do localStorage, espera.
-        // Se já tentou carregar e falhou, redireciona.
         if (localStorage.getItem('checkoutDetails') === null) {
             toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
             navigate('/carrinho');
@@ -106,7 +104,6 @@ const Checkout = () => {
   // Função para enviar os detalhes do pedido para o backend
   const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string) => {
     
-    // Usa os estados atuais do componente, que agora são populados pelo localStorage se necessário
     const currentDeliveryDetails = deliveryDetails;
     const currentDeliveryFee = deliveryFee;
     const currentPayerName = payerName;
@@ -134,7 +131,6 @@ const Checkout = () => {
     try {
         await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
         
-        // Notificação de sucesso
         toast.success('Pagamento Aprovado! Seu pedido está sendo preparado.');
         
         setPaymentStatus('success');
@@ -155,24 +151,20 @@ const Checkout = () => {
     const status = query.get('status');
     const paymentId = query.get('payment_id');
 
-    if (status && !orderProcessed) {
-        if (status === 'approved' && paymentId) {
-            // Pagamento Aprovado
-            setPaymentStatus('processing');
-            // Chama a função de envio do pedido
-            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
+    // Se já processamos o pedido, ignoramos.
+    if (orderProcessed) return;
+
+    if (status && paymentId) {
+        // Se o status for aprovado e ainda não processamos, iniciamos o processamento.
+        if (status === 'approved') {
+            if (paymentStatus !== 'processing' && paymentStatus !== 'success') {
+                setPaymentStatus('processing');
+                sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
+            }
         } else if (status === 'pending') {
-            // Pagamento Pendente
-            if (paymentStatus !== 'pending') {
-                toast.info('Seu pagamento está pendente. Aguardando confirmação.');
-                setPaymentStatus('pending');
-            }
+            setPaymentStatus('pending');
         } else if (status === 'rejected') {
-            // Pagamento Recusado
-            if (paymentStatus !== 'failed') {
-                toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-                setPaymentStatus('failed');
-            }
+            setPaymentStatus('failed');
         }
     }
   }, [location.search, sendOrderToBackend, orderProcessed, paymentStatus]);
@@ -243,7 +235,7 @@ const Checkout = () => {
   };
 
   // Renderização da tela de status (Sucesso, Falha, Pendente)
-  const renderStatusScreen = (status: 'success' | 'failed' | 'pending') => {
+  const renderStatusScreen = (status: 'success' | 'failed' | 'pending' | 'processing') => {
     let IconComponent: LucideIcon;
     let title, message, iconClass;
 
@@ -266,6 +258,12 @@ const Checkout = () => {
             message = 'Seu pagamento está em análise. Assim que for aprovado, você receberá uma confirmação por e-mail.';
             iconClass = 'text-yellow-500';
             break;
+        case 'processing':
+            IconComponent = Loader2;
+            title = 'Processando Pagamento...';
+            message = 'Aguarde enquanto confirmamos seu pagamento e finalizamos o pedido.';
+            iconClass = 'text-primary animate-spin';
+            break;
         default:
             return null;
     }
@@ -280,12 +278,14 @@ const Checkout = () => {
             <p className="text-muted-foreground mb-8">
               {message}
             </p>
-            <Link to="/">
-              <Button variant="hero" size="lg">
-                Voltar para o Início
-              </Button>
-            </Link>
-            {status !== 'success' && (
+            {status !== 'processing' && (
+                <Link to="/">
+                    <Button variant="hero" size="lg">
+                        Voltar para o Início
+                    </Button>
+                </Link>
+            )}
+            {status === 'failed' && (
                 <Button variant="outline" size="lg" className="ml-4" onClick={() => navigate('/checkout')}>
                     Tentar Novamente
                 </Button>
@@ -297,55 +297,44 @@ const Checkout = () => {
     );
   };
 
-  // Verifica o status de pagamento da URL
+  // --- Lógica de Renderização Principal ---
+
   const query = new URLSearchParams(location.search);
   const urlStatus = query.get('status');
 
-  // Se o status for 'approved' na URL, ou se o pedido já foi processado, mostra sucesso.
-  if (orderProcessed || urlStatus === 'approved') {
+  // 1. Se o pedido foi processado com sucesso (via backend)
+  if (orderProcessed || paymentStatus === 'success') {
     return renderStatusScreen('success');
   }
   
-  // Se o status for falha ou pendente na URL, mostra a tela correspondente.
-  if (urlStatus === 'rejected') {
+  // 2. Se estamos retornando do MP com um status, mostramos a tela de status correspondente.
+  if (urlStatus === 'approved' || paymentStatus === 'processing') {
+    // Se o status é 'approved' na URL, mas o pedido ainda não foi processado, mostramos 'processing'
+    return renderStatusScreen('processing');
+  }
+  
+  if (urlStatus === 'rejected' || paymentStatus === 'failed') {
     return renderStatusScreen('failed');
   }
   
-  if (urlStatus === 'pending') {
+  if (urlStatus === 'pending' || paymentStatus === 'pending') {
     return renderStatusScreen('pending');
   }
 
-  // Se o carrinho estiver vazio, mas não for um retorno de pagamento, redireciona (já tratado no useEffect).
+  // 3. Se o carrinho estiver vazio, mas não for um retorno de pagamento, redireciona (já tratado no useEffect).
   if (items.length === 0 && !urlStatus) {
       return null;
   }
 
-  // Se estiver na tela de checkout principal, mas os detalhes de entrega ainda não foram carregados (ou estão faltando)
+  // 4. Se estiver na tela de checkout principal, mas os detalhes de entrega ainda não foram carregados (ou estão faltando)
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
-    // Se houver itens no carrinho, mostra a tela de carregamento/erro.
     if (items.length > 0) {
-        return (
-            <div className="min-h-screen flex flex-col">
-                <Header />
-                <main className="flex-1 flex items-center justify-center">
-                <div className="text-center py-20">
-                    <Loader2 className="w-24 h-24 mx-auto text-primary animate-spin mb-6" />
-                    <h2 className="text-3xl font-bold mb-4">Carregando detalhes do pedido...</h2>
-                    <p className="text-muted-foreground mb-8">
-                    Se o carregamento demorar, por favor, retorne ao carrinho.
-                    </p>
-                    <Button onClick={() => navigate('/carrinho')} variant="hero" size="lg">
-                    Voltar para o Carrinho
-                    </Button>
-                </div>
-                </main>
-                <Footer />
-            </div>
-        );
+        return renderStatusScreen('processing'); // Mostra tela de carregamento enquanto espera dados do localStorage
     }
     return null;
   }
 
+  // 5. Renderização do formulário de checkout
   const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
   const isCheckoutButtonDisabled = items.length === 0 || isPayerDetailsMissing || isLoading;
 
