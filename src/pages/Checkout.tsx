@@ -171,6 +171,8 @@ const Checkout = () => {
     const status = query.get('status');
     const paymentId = query.get('payment_id');
 
+    console.log(`[Frontend - MP Return] Status na URL: ${status}, Payment ID: ${paymentId}`); // NOVO LOG
+
     // Se já processamos o pedido, ignoramos.
     if (orderProcessed) return;
 
@@ -178,6 +180,7 @@ const Checkout = () => {
         // Se o status for aprovado e ainda não processamos, iniciamos o processamento.
         if (status === 'approved') {
             if (paymentStatus !== 'processing' && paymentStatus !== 'success') {
+                console.log('[Frontend - MP Return] Status APROVADO detectado. Iniciando processamento do pedido.'); // NOVO LOG
                 setPaymentStatus('processing');
                 // Chamamos o processamento do pedido
                 sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
