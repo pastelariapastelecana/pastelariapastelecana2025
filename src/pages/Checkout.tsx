@@ -34,6 +34,7 @@ const Checkout = () => {
   const [paymentMethod, setPaymentMethod] = useState<'mercadopago'>('mercadopago');
   const [isLoading, setIsLoading] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'failed'>('idle');
+  const [orderProcessed, setOrderProcessed] = useState(false); // Novo estado para evitar reprocessamento
 
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
@@ -42,11 +43,21 @@ const Checkout = () => {
 
   // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
   useEffect(() => {
-    if (items.length === 0 || !deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
-      toast.info('Por favor, revise seu carrinho e endereço de entrega.');
-      navigate('/carrinho');
+    if (items.length === 0 && !orderProcessed) {
+      // Se o carrinho estiver vazio e não estivermos na tela de sucesso, redireciona.
+      if (location.pathname !== '/pagamento/sucesso' && location.pathname !== '/pagamento/falha' && location.pathname !== '/pagamento/pendente') {
+        toast.info('Por favor, revise seu carrinho e endereço de entrega.');
+        navigate('/carrinho');
+      }
     }
-  }, [items, navigate, deliveryDetails, deliveryFee]);
+    if ((!deliveryDetails || deliveryFee === undefined || deliveryFee === null) && !orderProcessed) {
+        // Se faltarem detalhes de entrega e não estivermos processando o sucesso, redireciona.
+        if (location.pathname !== '/pagamento/sucesso' && location.pathname !== '/pagamento/falha' && location.pathname !== '/pagamento/pendente') {
+            toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
+            navigate('/carrinho');
+        }
+    }
+  }, [items, navigate, deliveryDetails, deliveryFee, orderProcessed, location.pathname]);
 
   const constructFullAddress = (details?: typeof deliveryDetails) => {
     if (!details) return '';
@@ -76,8 +87,12 @@ const Checkout = () => {
 
     try {
         await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
-        toast.success('Pedido confirmado e notificação enviada!');
+        
+        // *** AVISO DE SUCESSO AQUI ***
+        toast.success('Pagamento Aprovado! Seu pedido está sendo preparado.');
+        
         setPaymentStatus('success');
+        setOrderProcessed(true); // Marca como processado
         clearCart();
     } catch (error) {
         console.error('Erro ao confirmar pedido no backend:', error);
@@ -86,24 +101,25 @@ const Checkout = () => {
     }
   }, [items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, payerName, payerEmail, clearCart]);
 
-  // Efeito para lidar com o retorno do Mercado Pago na página de sucesso
+  // Efeito para lidar com o retorno do Mercado Pago
   useEffect(() => {
     const query = new URLSearchParams(location.search);
     const status = query.get('status');
     const paymentId = query.get('payment_id');
 
-    if (location.pathname === '/pagamento/sucesso' && status === 'approved' && paymentId) {
-        if (paymentStatus !== 'success' && paymentStatus !== 'processing') {
-            setPaymentStatus('processing');
-            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro'); // Passa paymentId
-        }
+    if (location.pathname === '/pagamento/sucesso' && status === 'approved' && paymentId && !orderProcessed) {
+        // Se o pagamento foi aprovado e o pedido ainda não foi processado
+        setPaymentStatus('processing');
+        sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
     } else if (location.pathname === '/pagamento/sucesso' && status === 'pending') {
         toast.info('Seu pagamento está pendente. Aguardando confirmação.');
+        setPaymentStatus('failed'); // Trata como falha para não exibir a tela de sucesso
     } else if (location.pathname === '/pagamento/sucesso' && status === 'rejected') {
         toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-        navigate('/checkout');
+        setPaymentStatus('failed');
+        navigate('/checkout'); // Volta para a tela de checkout para tentar novamente
     }
-  }, [location.search, location.pathname, navigate, paymentStatus, sendOrderToBackend]);
+  }, [location.search, location.pathname, navigate, sendOrderToBackend, orderProcessed]);
 
 
   const handleCheckoutProPayment = async () => {
@@ -159,8 +175,8 @@ const Checkout = () => {
     }
   };
 
-  // Se o pagamento foi um sucesso (após retorno do MP)
-  if (paymentStatus === 'success' || location.pathname === '/pagamento/sucesso') {
+  // Se o pagamento foi um sucesso (após retorno do MP e processamento do backend)
+  if (paymentStatus === 'success' || orderProcessed) {
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -184,6 +200,30 @@ const Checkout = () => {
   }
 
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
+    // Se estivermos em uma rota de sucesso/falha, mas sem detalhes de entrega (ex: recarregou a página), 
+    // podemos mostrar uma mensagem de erro ou redirecionar.
+    if (location.pathname.startsWith('/pagamento/')) {
+        return (
+            <div className="min-h-screen flex flex-col">
+                <Header />
+                <main className="flex-1 flex items-center justify-center">
+                    <div className="text-center py-20">
+                        <h2 className="text-3xl font-bold mb-4">Status do Pagamento</h2>
+                        <p className="text-muted-foreground mb-8">
+                            O pagamento foi processado, mas os detalhes do pedido foram perdidos. Por favor, verifique seu e-mail de confirmação.
+                        </p>
+                        <Link to="/">
+                            <Button variant="hero" size="lg">
+                                Voltar para o Início
+                            </Button>
+                        </Link>
+                    </div>
+                </main>
+                <Footer />
+            </div>
+        );
+    }
+    
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -311,7 +351,7 @@ const Checkout = () => {
                   <RadioGroupItem value="mercadopago" id="payment-mercadopago" />
                   <Label htmlFor="payment-mercadopago" className="flex items-center gap-2 text-lg font-medium cursor-pointer">
                     <CreditCard className="w-6 h-6 text-blue-600" />
-                    (Cartão de Crédito/Débito e PIX)
+                    Mercado Pago (Cartão de Crédito/Débito e PIX)
                   </Label>
                 </div>
               </RadioGroup>
