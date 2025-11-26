@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useCart } from '@/contexts/CartContext';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { MapPin, CreditCard, Loader2, CheckCircle2, User, Mail, XCircle, Clock } from 'lucide-react';
+import { MapPin, CreditCard, Loader2, CheckCircle2, User, Mail, XCircle, Clock, LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -219,23 +219,24 @@ const Checkout = () => {
 
   // Renderização da tela de status (Sucesso, Falha, Pendente)
   const renderStatusScreen = (status: 'success' | 'failed' | 'pending') => {
-    let icon, title, message, iconClass;
+    let IconComponent: LucideIcon; // Renomeado para IconComponent
+    let title, message, iconClass;
 
     switch (status) {
         case 'success':
-            icon = CheckCircle2;
+            IconComponent = CheckCircle2;
             title = 'Pedido Realizado com Sucesso!';
             message = 'Agradecemos a sua compra. Seu pedido está sendo preparado!';
             iconClass = 'text-accent';
             break;
         case 'failed':
-            icon = XCircle;
+            IconComponent = XCircle;
             title = 'Pagamento Não Aprovado';
             message = 'Seu pagamento foi recusado ou falhou. Por favor, tente novamente ou escolha outro método.';
             iconClass = 'text-destructive';
             break;
         case 'pending':
-            icon = Clock;
+            IconComponent = Clock;
             title = 'Pagamento Pendente';
             message = 'Seu pagamento está em análise. Assim que for aprovado, você receberá uma confirmação por e-mail.';
             iconClass = 'text-yellow-500';
@@ -249,7 +250,7 @@ const Checkout = () => {
         <Header />
         <main className="flex-1 flex items-center justify-center">
           <div className="text-center py-20">
-            {icon && <Icon className={`w-24 h-24 mx-auto mb-6 ${iconClass}`} />}
+            <IconComponent className={`w-24 h-24 mx-auto mb-6 ${iconClass}`} />
             <h2 className="text-3xl font-bold mb-4">{title}</h2>
             <p className="text-muted-foreground mb-8">
               {message}
