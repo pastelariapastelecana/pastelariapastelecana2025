@@ -126,8 +126,9 @@ const Checkout = () => {
         currentPayerEmail = parsedPayer.email;
     }
 
-    if (!currentDeliveryDetails || currentDeliveryFee === null || currentDeliveryFee === undefined) {
-        toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
+    if (!currentDeliveryDetails || currentDeliveryFee === null || currentDeliveryFee === undefined || !currentPayerName || !currentPayerEmail) {
+        console.error('Dados essenciais do pedido ausentes após retorno do MP. Não é possível confirmar o pedido.');
+        toast.error('Erro: Dados do pedido incompletos. Por favor, tente novamente.');
         setPaymentStatus('failed');
         return;
     }
@@ -144,6 +145,8 @@ const Checkout = () => {
         paymentId: paymentId,
         orderDate: new Date().toISOString(),
     };
+    
+    console.log('[Frontend] Enviando pedido para confirmação:', orderDetails); // Log para depuração
 
     try {
         await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
