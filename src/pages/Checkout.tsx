@@ -15,51 +15,89 @@ import axios from 'axios';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
+// Define a interface para os detalhes de entrega
+interface DeliveryDetails {
+    address: string;
+    number: string;
+    neighborhood: string;
+    city: string;
+    zipCode: string;
+}
+
 const Checkout = () => {
   const { items, totalPrice, clearCart } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const { deliveryDetails, deliveryFee } = (location.state || {}) as {
-    deliveryDetails?: {
-      address: string;
-      number: string;
-      neighborhood: string;
-      city: string;
-      zipCode: string;
-    };
+  // Tenta obter os detalhes de entrega do state de navegação ou do localStorage
+  const initialDeliveryState = (location.state || {}) as {
+    deliveryDetails?: DeliveryDetails;
     deliveryFee?: number | null;
   };
+
+  const [deliveryDetails, setDeliveryDetails] = useState<DeliveryDetails | undefined>(initialDeliveryState.deliveryDetails);
+  const [deliveryFee, setDeliveryFee] = useState<number | null | undefined>(initialDeliveryState.deliveryFee);
 
   const [paymentMethod, setPaymentMethod] = useState<'mercadopago'>('mercadopago');
   const [isLoading, setIsLoading] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'failed' | 'pending'>('idle');
-  const [orderProcessed, setOrderProcessed] = useState(false); // Novo estado para evitar reprocessamento
+  const [orderProcessed, setOrderProcessed] = useState(false);
 
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
 
   const totalWithDelivery = totalPrice + (deliveryFee || 0);
 
+  // Efeito para carregar dados persistidos e inicializar estados
+  useEffect(() => {
+    const storedDetails = localStorage.getItem('checkoutDetails');
+    const storedPayer = localStorage.getItem('payerDetails');
+
+    // 1. Carregar detalhes de entrega se estiverem faltando no state (após redirecionamento)
+    if ((!deliveryDetails || deliveryFee === undefined || deliveryFee === null) && storedDetails) {
+        try {
+            const parsedDetails = JSON.parse(storedDetails);
+            setDeliveryDetails(parsedDetails.deliveryDetails);
+            setDeliveryFee(parsedDetails.deliveryFee);
+        } catch (e) {
+            console.error("Erro ao parsear checkoutDetails do localStorage", e);
+        }
+    }
+
+    // 2. Carregar dados do pagador
+    if (storedPayer) {
+        try {
+            const parsedPayer = JSON.parse(storedPayer);
+            setPayerName(parsedPayer.name || '');
+            setPayerEmail(parsedPayer.email || '');
+        } catch (e) {
+            console.error("Erro ao parsear payerDetails do localStorage", e);
+        }
+    }
+  }, [deliveryDetails, deliveryFee]);
+
+
   // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
   useEffect(() => {
     const isPaymentReturn = location.search.includes('status=');
     
-    // Se o carrinho estiver vazio e não for um retorno de pagamento, redireciona.
     if (items.length === 0 && !orderProcessed && !isPaymentReturn) {
       toast.info('Por favor, revise seu carrinho e endereço de entrega.');
       navigate('/cardapio');
       return;
     }
     
-    // Se estiver na tela de checkout principal e faltarem detalhes, redireciona.
     if (location.pathname === '/checkout' && items.length > 0 && (!deliveryDetails || deliveryFee === undefined || deliveryFee === null)) {
-        toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
-        navigate('/carrinho');
+        // Se os dados ainda não foram carregados do localStorage, espera.
+        // Se já tentou carregar e falhou, redireciona.
+        if (localStorage.getItem('checkoutDetails') === null) {
+            toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
+            navigate('/carrinho');
+        }
     }
   }, [items, navigate, deliveryDetails, deliveryFee, orderProcessed, location.search, location.pathname]);
 
-  const constructFullAddress = (details?: typeof deliveryDetails) => {
+  const constructFullAddress = (details?: DeliveryDetails) => {
     if (!details) return '';
     const { address, number, neighborhood, city, zipCode } = details;
     return `${address}, ${number}, ${neighborhood}, ${city} - ${zipCode}`;
@@ -67,28 +105,14 @@ const Checkout = () => {
 
   // Função para enviar os detalhes do pedido para o backend
   const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string) => {
-    // Usamos localStorage para persistir os detalhes do pedido e do pagador
-    const storedDetails = localStorage.getItem('checkoutDetails');
-    const storedPayer = localStorage.getItem('payerDetails');
     
-    let currentDeliveryDetails = deliveryDetails;
-    let currentDeliveryFee = deliveryFee;
-    let currentPayerName = payerName;
-    let currentPayerEmail = payerEmail;
+    // Usa os estados atuais do componente, que agora são populados pelo localStorage se necessário
+    const currentDeliveryDetails = deliveryDetails;
+    const currentDeliveryFee = deliveryFee;
+    const currentPayerName = payerName;
+    const currentPayerEmail = payerEmail;
 
-    if (storedDetails) {
-        const parsedDetails = JSON.parse(storedDetails);
-        currentDeliveryDetails = parsedDetails.deliveryDetails;
-        currentDeliveryFee = parsedDetails.deliveryFee;
-    }
-    if (storedPayer) {
-        const parsedPayer = JSON.parse(storedPayer);
-        currentPayerName = parsedPayer.name;
-        currentPayerEmail = parsedPayer.email;
-    }
-
-    if (!currentDeliveryDetails || currentDeliveryFee === null) {
-        // Se não houver detalhes persistidos, não podemos processar o pedido.
+    if (!currentDeliveryDetails || currentDeliveryFee === null || currentDeliveryFee === undefined) {
         toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
         setPaymentStatus('failed');
         return;
@@ -135,6 +159,7 @@ const Checkout = () => {
         if (status === 'approved' && paymentId) {
             // Pagamento Aprovado
             setPaymentStatus('processing');
+            // Chama a função de envio do pedido
             sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
         } else if (status === 'pending') {
             // Pagamento Pendente
@@ -164,7 +189,7 @@ const Checkout = () => {
 
 
   const handleCheckoutProPayment = async () => {
-    if (!deliveryDetails || deliveryFee === null || !payerName.trim() || !payerEmail.trim()) {
+    if (!deliveryDetails || deliveryFee === null || deliveryFee === undefined || !payerName.trim() || !payerEmail.trim()) {
         toast.error('Por favor, preencha todos os dados do pagador e de entrega.');
         return;
     }
@@ -219,7 +244,7 @@ const Checkout = () => {
 
   // Renderização da tela de status (Sucesso, Falha, Pendente)
   const renderStatusScreen = (status: 'success' | 'failed' | 'pending') => {
-    let IconComponent: LucideIcon; // Renomeado para IconComponent
+    let IconComponent: LucideIcon;
     let title, message, iconClass;
 
     switch (status) {
@@ -276,22 +301,28 @@ const Checkout = () => {
   const query = new URLSearchParams(location.search);
   const urlStatus = query.get('status');
 
-  if (paymentStatus === 'success' || orderProcessed || urlStatus === 'approved') {
+  // Se o status for 'approved' na URL, ou se o pedido já foi processado, mostra sucesso.
+  if (orderProcessed || urlStatus === 'approved') {
     return renderStatusScreen('success');
   }
   
-  if (paymentStatus === 'failed' || urlStatus === 'rejected') {
+  // Se o status for falha ou pendente na URL, mostra a tela correspondente.
+  if (urlStatus === 'rejected') {
     return renderStatusScreen('failed');
   }
   
-  if (paymentStatus === 'pending' || urlStatus === 'pending') {
+  if (urlStatus === 'pending') {
     return renderStatusScreen('pending');
   }
 
+  // Se o carrinho estiver vazio, mas não for um retorno de pagamento, redireciona (já tratado no useEffect).
+  if (items.length === 0 && !urlStatus) {
+      return null;
+  }
 
+  // Se estiver na tela de checkout principal, mas os detalhes de entrega ainda não foram carregados (ou estão faltando)
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
-    // Se estivermos em uma rota de pagamento, mas sem detalhes de entrega (ex: recarregou a página), 
-    // e não houver status na URL, mostramos a tela de carregamento/erro.
+    // Se houver itens no carrinho, mostra a tela de carregamento/erro.
     if (items.length > 0) {
         return (
             <div className="min-h-screen flex flex-col">
@@ -312,7 +343,6 @@ const Checkout = () => {
             </div>
         );
     }
-    // Se o carrinho estiver vazio e não houver status na URL, o useEffect já redirecionou.
     return null;
   }
 
@@ -350,7 +380,7 @@ const Checkout = () => {
                 ))}
               </div>
               <div className="pt-4 mt-4 space-y-2">
-                {deliveryFee !== null && (
+                {deliveryFee !== null && deliveryFee !== undefined && (
                   <div className="flex justify-between text-lg">
                     <span className="text-muted-foreground">Frete:</span>
                     <span className="font-medium text-accent">R$ {deliveryFee.toFixed(2)}</span>
@@ -436,7 +466,7 @@ const Checkout = () => {
                   <span className="text-muted-foreground">Subtotal:</span>
                   <span className="font-medium">R$ {totalPrice.toFixed(2)}</span>
                 </div>
-                {deliveryFee !== null && (
+                {deliveryFee !== null && deliveryFee !== undefined && (
                   <div className="flex justify-between text-lg">
                     <span className="text-muted-foreground">Frete:</span>
                     <span className="font-medium text-accent">R$ {deliveryFee.toFixed(2)}</span>
