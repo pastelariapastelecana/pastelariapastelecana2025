@@ -34,9 +34,6 @@ const App = () => (
             <Route path="/nossa-loja" element={<NossaLoja />} />
             <Route path="/carrinho" element={<Carrinho />} />
             <Route path="/checkout" element={<Checkout />} />
-            <Route path="/pagamento/sucesso" element={<Checkout />} />
-            <Route path="/pagamento/falha" element={<Checkout />} /> {/* Nova rota para falha */}
-            <Route path="/pagamento/pendente" element={<Checkout />} /> {/* Nova rota para pendente */}
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
