@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useCart } from '@/contexts/CartContext';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { MapPin, CreditCard, Loader2, CheckCircle2, User, Mail } from 'lucide-react';
+import { MapPin, CreditCard, Loader2, CheckCircle2, User, Mail, XCircle, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -33,7 +33,7 @@ const Checkout = () => {
 
   const [paymentMethod, setPaymentMethod] = useState<'mercadopago'>('mercadopago');
   const [isLoading, setIsLoading] = useState(false);
-  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'failed'>('idle');
+  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'failed' | 'pending'>('idle');
   const [orderProcessed, setOrderProcessed] = useState(false); // Novo estado para evitar reprocessamento
 
   const [payerName, setPayerName] = useState('');
@@ -43,19 +43,15 @@ const Checkout = () => {
 
   // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
   useEffect(() => {
-    if (items.length === 0 && !orderProcessed) {
-      // Se o carrinho estiver vazio e não estivermos na tela de sucesso, redireciona.
-      if (location.pathname !== '/pagamento/sucesso' && location.pathname !== '/pagamento/falha' && location.pathname !== '/pagamento/pendente') {
-        toast.info('Por favor, revise seu carrinho e endereço de entrega.');
-        navigate('/carrinho');
-      }
+    const isPaymentRoute = location.pathname.startsWith('/pagamento/');
+    
+    if (items.length === 0 && !orderProcessed && !isPaymentRoute) {
+      toast.info('Por favor, revise seu carrinho e endereço de entrega.');
+      navigate('/carrinho');
     }
-    if ((!deliveryDetails || deliveryFee === undefined || deliveryFee === null) && !orderProcessed) {
-        // Se faltarem detalhes de entrega e não estivermos processando o sucesso, redireciona.
-        if (location.pathname !== '/pagamento/sucesso' && location.pathname !== '/pagamento/falha' && location.pathname !== '/pagamento/pendente') {
-            toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
-            navigate('/carrinho');
-        }
+    if ((!deliveryDetails || deliveryFee === undefined || deliveryFee === null) && !orderProcessed && !isPaymentRoute) {
+        toast.info('Detalhes de entrega ausentes. Retorne ao carrinho.');
+        navigate('/carrinho');
     }
   }, [items, navigate, deliveryDetails, deliveryFee, orderProcessed, location.pathname]);
 
@@ -107,19 +103,32 @@ const Checkout = () => {
     const status = query.get('status');
     const paymentId = query.get('payment_id');
 
-    if (location.pathname === '/pagamento/sucesso' && status === 'approved' && paymentId && !orderProcessed) {
-        // Se o pagamento foi aprovado e o pedido ainda não foi processado
+    if (location.pathname.startsWith('/checkout')) {
+        // Limpa o status se o usuário voltar para a tela de checkout principal
+        if (paymentStatus !== 'idle' && !orderProcessed) {
+            setPaymentStatus('idle');
+        }
+        return;
+    }
+
+    if (status === 'approved' && paymentId && !orderProcessed) {
+        // Pagamento Aprovado
         setPaymentStatus('processing');
         sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
-    } else if (location.pathname === '/pagamento/sucesso' && status === 'pending') {
-        toast.info('Seu pagamento está pendente. Aguardando confirmação.');
-        setPaymentStatus('failed'); // Trata como falha para não exibir a tela de sucesso
-    } else if (location.pathname === '/pagamento/sucesso' && status === 'rejected') {
-        toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-        setPaymentStatus('failed');
-        navigate('/checkout'); // Volta para a tela de checkout para tentar novamente
+    } else if (status === 'pending') {
+        // Pagamento Pendente
+        if (paymentStatus !== 'pending') {
+            toast.info('Seu pagamento está pendente. Aguardando confirmação.');
+            setPaymentStatus('pending');
+        }
+    } else if (status === 'rejected') {
+        // Pagamento Recusado
+        if (paymentStatus !== 'failed') {
+            toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
+            setPaymentStatus('failed');
+        }
     }
-  }, [location.search, location.pathname, navigate, sendOrderToBackend, orderProcessed]);
+  }, [location.search, location.pathname, navigate, sendOrderToBackend, orderProcessed, paymentStatus]);
 
 
   const handleCheckoutProPayment = async () => {
@@ -175,53 +184,80 @@ const Checkout = () => {
     }
   };
 
-  // Se o pagamento foi um sucesso (após retorno do MP e processamento do backend)
-  if (paymentStatus === 'success' || orderProcessed) {
+  // Renderização da tela de status (Sucesso, Falha, Pendente)
+  const renderStatusScreen = (status: 'success' | 'failed' | 'pending') => {
+    let icon, title, message, iconClass;
+
+    switch (status) {
+        case 'success':
+            icon = CheckCircle2;
+            title = 'Pedido Realizado com Sucesso!';
+            message = 'Agradecemos a sua compra. Seu pedido está sendo preparado!';
+            iconClass = 'text-accent';
+            break;
+        case 'failed':
+            icon = XCircle;
+            title = 'Pagamento Não Aprovado';
+            message = 'Seu pagamento foi recusado ou falhou. Por favor, tente novamente ou escolha outro método.';
+            iconClass = 'text-destructive';
+            break;
+        case 'pending':
+            icon = Clock;
+            title = 'Pagamento Pendente';
+            message = 'Seu pagamento está em análise. Assim que for aprovado, você receberá uma confirmação por e-mail.';
+            iconClass = 'text-yellow-500';
+            break;
+        default:
+            return null;
+    }
+
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
         <main className="flex-1 flex items-center justify-center">
           <div className="text-center py-20">
-            <CheckCircle2 className="w-24 h-24 mx-auto text-accent mb-6" />
-            <h2 className="text-3xl font-bold mb-4">Pedido Realizado com Sucesso!</h2>
+            {icon && <Icon className={`w-24 h-24 mx-auto mb-6 ${iconClass}`} />}
+            <h2 className="text-3xl font-bold mb-4">{title}</h2>
             <p className="text-muted-foreground mb-8">
-              Agradecemos a sua compra. Seu pedido está sendo preparado!
+              {message}
             </p>
             <Link to="/">
               <Button variant="hero" size="lg">
                 Voltar para o Início
               </Button>
             </Link>
+            {status !== 'success' && (
+                <Button variant="outline" size="lg" className="ml-4" onClick={() => navigate('/checkout')}>
+                    Tentar Novamente
+                </Button>
+            )}
           </div>
         </main>
         <Footer />
       </div>
     );
+  };
+
+  // Se o pagamento foi um sucesso (após retorno do MP e processamento do backend)
+  if (paymentStatus === 'success' || orderProcessed) {
+    return renderStatusScreen('success');
+  }
+  
+  // Se o status for falha ou pendente (após retorno do MP)
+  if (paymentStatus === 'failed' || location.search.includes('status=rejected')) {
+    return renderStatusScreen('failed');
+  }
+  
+  if (paymentStatus === 'pending' || location.search.includes('status=pending')) {
+    return renderStatusScreen('pending');
   }
 
+
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
-    // Se estivermos em uma rota de sucesso/falha, mas sem detalhes de entrega (ex: recarregou a página), 
+    // Se estivermos em uma rota de pagamento, mas sem detalhes de entrega (ex: recarregou a página), 
     // podemos mostrar uma mensagem de erro ou redirecionar.
     if (location.pathname.startsWith('/pagamento/')) {
-        return (
-            <div className="min-h-screen flex flex-col">
-                <Header />
-                <main className="flex-1 flex items-center justify-center">
-                    <div className="text-center py-20">
-                        <h2 className="text-3xl font-bold mb-4">Status do Pagamento</h2>
-                        <p className="text-muted-foreground mb-8">
-                            O pagamento foi processado, mas os detalhes do pedido foram perdidos. Por favor, verifique seu e-mail de confirmação.
-                        </p>
-                        <Link to="/">
-                            <Button variant="hero" size="lg">
-                                Voltar para o Início
-                            </Button>
-                        </Link>
-                    </div>
-                </main>
-                <Footer />
-            </div>
-        );
+        return renderStatusScreen('failed');
     }
     
     return (
