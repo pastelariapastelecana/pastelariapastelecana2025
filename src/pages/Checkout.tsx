@@ -24,6 +24,19 @@ interface DeliveryDetails {
     zipCode: string;
 }
 
+// Função auxiliar para carregar dados do pagador do localStorage
+const loadPayerDetails = () => {
+    const storedPayer = localStorage.getItem('payerDetails');
+    if (storedPayer) {
+        try {
+            return JSON.parse(storedPayer);
+        } catch (e) {
+            console.error("Erro ao parsear payerDetails do localStorage", e);
+        }
+    }
+    return { name: '', email: '' };
+};
+
 const Checkout = () => {
   const { items, totalPrice, clearCart } = useCart();
   const navigate = useNavigate();
@@ -43,17 +56,17 @@ const Checkout = () => {
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'failed' | 'pending'>('idle');
   const [orderProcessed, setOrderProcessed] = useState(false);
 
-  const [payerName, setPayerName] = useState('');
-  const [payerEmail, setPayerEmail] = useState('');
+  // Inicializa o estado do pagador usando a função auxiliar
+  const initialPayerDetails = loadPayerDetails();
+  const [payerName, setPayerName] = useState(initialPayerDetails.name);
+  const [payerEmail, setPayerEmail] = useState(initialPayerDetails.email);
 
   const totalWithDelivery = totalPrice + (deliveryFee || 0);
 
-  // Efeito para carregar dados persistidos e inicializar estados
+  // Efeito para carregar dados persistidos de entrega se estiverem faltando
   useEffect(() => {
     const storedDetails = localStorage.getItem('checkoutDetails');
-    const storedPayer = localStorage.getItem('payerDetails');
 
-    // 1. Carregar detalhes de entrega se estiverem faltando no state (após redirecionamento)
     if ((!deliveryDetails || deliveryFee === undefined || deliveryFee === null) && storedDetails) {
         try {
             const parsedDetails = JSON.parse(storedDetails);
@@ -61,17 +74,6 @@ const Checkout = () => {
             setDeliveryFee(parsedDetails.deliveryFee);
         } catch (e) {
             console.error("Erro ao parsear checkoutDetails do localStorage", e);
-        }
-    }
-
-    // 2. Carregar dados do pagador
-    if (storedPayer) {
-        try {
-            const parsedPayer = JSON.parse(storedPayer);
-            setPayerName(parsedPayer.name || '');
-            setPayerEmail(parsedPayer.email || '');
-        } catch (e) {
-            console.error("Erro ao parsear payerDetails do localStorage", e);
         }
     }
   }, [deliveryDetails, deliveryFee]);
@@ -104,10 +106,25 @@ const Checkout = () => {
   // Função para enviar os detalhes do pedido para o backend
   const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string) => {
     
-    const currentDeliveryDetails = deliveryDetails;
-    const currentDeliveryFee = deliveryFee;
-    const currentPayerName = payerName;
-    const currentPayerEmail = payerEmail;
+    // Recupera os dados mais recentes do localStorage para garantir que não estamos usando estados antigos
+    const storedDetails = localStorage.getItem('checkoutDetails');
+    const storedPayer = localStorage.getItem('payerDetails');
+
+    let currentDeliveryDetails = deliveryDetails;
+    let currentDeliveryFee = deliveryFee;
+    let currentPayerName = payerName;
+    let currentPayerEmail = payerEmail;
+
+    if (storedDetails) {
+        const parsedDetails = JSON.parse(storedDetails);
+        currentDeliveryDetails = parsedDetails.deliveryDetails;
+        currentDeliveryFee = parsedDetails.deliveryFee;
+    }
+    if (storedPayer) {
+        const parsedPayer = JSON.parse(storedPayer);
+        currentPayerName = parsedPayer.name;
+        currentPayerEmail = parsedPayer.email;
+    }
 
     if (!currentDeliveryDetails || currentDeliveryFee === null || currentDeliveryFee === undefined) {
         toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
@@ -159,6 +176,7 @@ const Checkout = () => {
         if (status === 'approved') {
             if (paymentStatus !== 'processing' && paymentStatus !== 'success') {
                 setPaymentStatus('processing');
+                // Chamamos o processamento do pedido
                 sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
             }
         } else if (status === 'pending') {
@@ -217,6 +235,10 @@ const Checkout = () => {
                 name: payerName,
                 email: payerEmail,
             },
+            // Adicionando metadados para facilitar a identificação do pedido no webhook (opcional, mas útil)
+            metadata: {
+                order_id: new Date().getTime(),
+            }
         });
 
         if (response.data && response.data.init_point) {
