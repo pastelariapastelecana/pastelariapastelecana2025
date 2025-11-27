@@ -3,8 +3,8 @@ const { createPaymentPreference } = require('../services/mercadoPagoService');
 
 async function processPayment(req, res) {
     try {
-        const { items, payer } = req.body;
-        const preference = await createPaymentPreference(items, payer);
+        const { items, payer, orderId } = req.body;
+        const preference = await createPaymentPreference(items, payer, orderId);
         res.json({ id: preference.id, init_point: preference.init_point });
     } catch (error) {
         console.error('Erro ao criar preferência de pagamento:', error.response ? error.response.data : error.message);
