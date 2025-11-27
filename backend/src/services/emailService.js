@@ -32,7 +32,7 @@ const transporter = nodemailer.createTransport({
 });
 
 async function sendOrderConfirmationEmail(orderDetails) {
-    const { items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, paymentMethod, payerName, payerEmail, orderDate, paymentId } = orderDetails;
+    const { items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, paymentMethod, payerName, payerEmail, orderDate, paymentId, orderId } = orderDetails;
 
     const itemDetails = items.map(item => `
         <li>${item.name} (x${item.quantity}) - R$ ${item.price.toFixed(2)} cada</li>
@@ -41,6 +41,7 @@ async function sendOrderConfirmationEmail(orderDetails) {
     const emailContent = `
         <h1>Novo Pedido Recebido!</h1>
         <p>Um novo pedido foi finalizado com sucesso em ${new Date(orderDate).toLocaleString('pt-BR')}.</p>
+        ${orderId ? `<p><strong>ID do Pedido Interno (External Reference):</strong> ${orderId}</p>` : ''}
         ${paymentId ? `<p><strong>ID do Pagamento (Mercado Pago):</strong> ${paymentId}</p>` : ''}
         
         <h2>Detalhes do Cliente:</h2>
@@ -60,7 +61,7 @@ async function sendOrderConfirmationEmail(orderDetails) {
         <p><strong>Subtotal dos Itens:</strong> R$ ${totalPrice.toFixed(2)}</p>
         <p><strong>Taxa de Entrega:</strong> R$ ${deliveryFee ? deliveryFee.toFixed(2) : '0.00'}</p>
         <p><strong>Total Geral:</strong> R$ ${totalWithDelivery.toFixed(2)}</p>
-        <p><strong>Método de Pagamento:</strong> ${paymentMethod === 'pix' ? 'PIX' : 'Cartão de Crédito/Débito (Mercado Pago)'}</p>
+        <p><strong>Método de Pagamento:</strong> ${paymentMethod === 'pix' ? 'PIX' : 'Mercado Pago'}</p>
 
         <p>Por favor, prepare o pedido e organize a entrega.</p>
         <p>Atenciosamente,<br>Sua Pastelaria Pastel & Cana</p>
@@ -69,7 +70,7 @@ async function sendOrderConfirmationEmail(orderDetails) {
     const mailOptions = {
         from: emailUser,
         to: orderRecipientEmail,
-        subject: `Novo Pedido Recebido - #${new Date(orderDate).getTime()} ${paymentId ? `(MP ID: ${paymentId})` : ''}`,
+        subject: `Novo Pedido Recebido - #${orderId ? orderId.substring(0, 8) : new Date(orderDate).getTime()} (MP ID: ${paymentId})`,
         html: emailContent,
     };
 
