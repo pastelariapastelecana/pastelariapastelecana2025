@@ -15,21 +15,48 @@ import axios from 'axios';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
+// Definindo a interface para os detalhes do pedido salvos
+interface SavedOrderDetails {
+    items: typeof items;
+    deliveryDetails: {
+        address: string;
+        number: string;
+        neighborhood: string;
+        city: string;
+        zipCode: string;
+    };
+    deliveryFee: number;
+    totalPrice: number;
+    totalWithDelivery: number;
+    payerName: string;
+    payerEmail: string;
+}
+
 const Checkout = () => {
   const { items, totalPrice, clearCart } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const { deliveryDetails, deliveryFee } = (location.state || {}) as {
-    deliveryDetails?: {
-      address: string;
-      number: string;
-      neighborhood: string;
-      city: string;
-      zipCode: string;
-    };
+  // Detalhes de entrega iniciais vêm do state da navegação do Carrinho
+  const initialDeliveryState = (location.state || {}) as {
+    deliveryDetails?: SavedOrderDetails['deliveryDetails'];
     deliveryFee?: number | null;
   };
+
+  // Usamos o estado local para armazenar os detalhes do pedido, que podem ser recuperados da sessão
+  const [currentOrderDetails, setCurrentOrderDetails] = useState<{
+    deliveryDetails: SavedOrderDetails['deliveryDetails'] | undefined;
+    deliveryFee: number | null;
+    items: typeof items;
+    totalPrice: number;
+    totalWithDelivery: number;
+  }>({
+    deliveryDetails: initialDeliveryState.deliveryDetails,
+    deliveryFee: initialDeliveryState.deliveryFee === undefined ? null : initialDeliveryState.deliveryFee,
+    items: items,
+    totalPrice: totalPrice,
+    totalWithDelivery: totalPrice + (initialDeliveryState.deliveryFee || 0),
+  });
 
   const [paymentMethod, setPaymentMethod] = useState<'mercadopago'>('mercadopago');
   const [isLoading, setIsLoading] = useState(false);
@@ -38,46 +65,74 @@ const Checkout = () => {
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
 
-  const totalWithDelivery = totalPrice + (deliveryFee || 0);
+  const { deliveryDetails, deliveryFee, totalWithDelivery } = currentOrderDetails;
+
+  // Efeito para lidar com a perda de estado após o redirecionamento
+  useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    const status = query.get('status');
+    
+    if (status && !deliveryDetails) {
+        const savedDetailsJson = sessionStorage.getItem('checkout_details');
+        if (savedDetailsJson) {
+            const savedDetails: SavedOrderDetails = JSON.parse(savedDetailsJson);
+            
+            // Atualiza o estado local com os dados recuperados
+            setCurrentOrderDetails({
+                deliveryDetails: savedDetails.deliveryDetails,
+                deliveryFee: savedDetails.deliveryFee,
+                items: savedDetails.items,
+                totalPrice: savedDetails.totalPrice,
+                totalWithDelivery: savedDetails.totalWithDelivery,
+            });
+            setPayerName(savedDetails.payerName);
+            setPayerEmail(savedDetails.payerEmail);
+            
+            // Limpa os dados da sessão após a recuperação
+            sessionStorage.removeItem('checkout_details');
+        }
+    }
+  }, [location.search, deliveryDetails]);
+
 
   // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
   useEffect(() => {
-    if (items.length === 0 && location.pathname !== '/pagamento/sucesso') {
-      toast.info('Por favor, revise seu carrinho e endereço de entrega.');
-      navigate('/carrinho');
+    // Verifica se estamos na página de checkout e se os dados essenciais estão faltando
+    if (location.pathname === '/checkout' && (currentOrderDetails.items.length === 0 || !deliveryDetails || deliveryFee === null)) {
+      // Se o status for 'approved' ou 'pending', não redireciona imediatamente, pois pode estar processando
+      const query = new URLSearchParams(location.search);
+      const status = query.get('status');
+      if (status !== 'approved' && status !== 'pending') {
+        toast.info('Por favor, revise seu carrinho e endereço de entrega.');
+        navigate('/carrinho');
+      }
     }
-  }, [items, navigate, deliveryDetails, deliveryFee, location.pathname]);
+  }, [currentOrderDetails.items.length, navigate, deliveryDetails, deliveryFee, location.pathname]);
 
-  const constructFullAddress = (details?: typeof deliveryDetails) => {
+  const constructFullAddress = (details?: SavedOrderDetails['deliveryDetails']) => {
     if (!details) return '';
     const { address, number, neighborhood, city, zipCode } = details;
     return `${address}, ${number}, ${neighborhood}, ${city} - ${zipCode}`;
   };
 
   // Função para enviar os detalhes do pedido para o backend
-  const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string) => {
-    if (!deliveryDetails || deliveryFee === null) {
+  const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string, orderDetails: SavedOrderDetails) => {
+    if (!orderDetails.deliveryDetails || orderDetails.deliveryFee === null) {
         toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
         return;
     }
 
-    const orderDetails = {
-        items: items,
-        deliveryDetails: deliveryDetails,
-        deliveryFee: deliveryFee,
-        totalPrice: totalPrice,
-        totalWithDelivery: totalWithDelivery,
+    const finalOrderDetails = {
+        ...orderDetails,
         paymentMethod: paymentMethodUsed,
-        payerName: payerName,
-        payerEmail: payerEmail,
-        paymentId: paymentId, // Passa paymentId
+        paymentId: paymentId,
         orderDate: new Date().toISOString(),
     };
 
-    console.log('[Checkout] Enviando pedido detalhado para o backend:', orderDetails);
+    console.log('[Checkout] Enviando pedido detalhado para o backend:', finalOrderDetails);
 
     try {
-        await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
+        await axios.post(`${BACKEND_URL}/api/confirm-order`, finalOrderDetails);
         toast.success('Pedido confirmado e notificação enviada!');
         setPaymentStatus('success');
         clearCart();
@@ -86,7 +141,7 @@ const Checkout = () => {
         toast.error('Ocorreu um erro ao finalizar seu pedido. Por favor, entre em contato.');
         setPaymentStatus('failed');
     }
-  }, [items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, payerName, payerEmail, clearCart]);
+  }, [clearCart]);
 
   // Efeito para lidar com o retorno do Mercado Pago na página de sucesso
   useEffect(() => {
@@ -95,26 +150,29 @@ const Checkout = () => {
     const paymentId = query.get('payment_id');
     const processedKey = `mp_processed_${paymentId}`;
 
-    if (location.pathname === '/checkout' && status === 'approved' && paymentId) {
-        // Verifica se o paymentId já foi processado nesta sessão
-        if (sessionStorage.getItem(processedKey) !== 'true') {
-            sessionStorage.setItem(processedKey, 'true');
-            setPaymentStatus('processing');
-            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
+    if (location.pathname === '/checkout' && status && paymentId) {
+        const savedDetailsJson = sessionStorage.getItem('checkout_details_temp');
+        
+        if (status === 'approved' && savedDetailsJson) {
+            if (sessionStorage.getItem(processedKey) !== 'true') {
+                sessionStorage.setItem(processedKey, 'true');
+                setPaymentStatus('processing');
+                
+                const savedDetails: SavedOrderDetails = JSON.parse(savedDetailsJson);
+                sendOrderToBackend(paymentId, 'mercadopago_checkout_pro', savedDetails);
+            }
+        } else if (status === 'pending') {
+            toast.info('Seu pagamento está pendente. Aguardando confirmação.');
+            setPaymentStatus('failed'); 
+        } else if (status === 'rejected') {
+            toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
+            setPaymentStatus('failed');
         }
-    } else if (location.pathname === '/checkout' && status === 'pending') {
-        toast.info('Seu pagamento está pendente. Aguardando confirmação.');
-        setPaymentStatus('failed'); // Trata como falha temporária para não mostrar sucesso
-    } else if (location.pathname === '/checkout' && status === 'rejected') {
-        toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-        setPaymentStatus('failed');
+        
+        // Limpa o item temporário após o processamento do status
+        sessionStorage.removeItem('checkout_details_temp');
     }
-    
-    // Limpa o status de processamento se não houver um status de retorno claro
-    if (!status && paymentStatus === 'processing') {
-        setPaymentStatus('idle');
-    }
-  }, [location.search, location.pathname, sendOrderToBackend, paymentStatus]);
+  }, [location.search, location.pathname, sendOrderToBackend]);
 
 
   const handleCheckoutProPayment = async () => {
@@ -147,6 +205,19 @@ const Checkout = () => {
                 description: 'Custo de entrega do pedido',
             });
         }
+        
+        // 1. Salva todos os detalhes do pedido na sessão ANTES de redirecionar
+        const detailsToSave: SavedOrderDetails = {
+            deliveryDetails,
+            deliveryFee,
+            payerName,
+            payerEmail,
+            items: items,
+            totalPrice: totalPrice,
+            totalWithDelivery: totalWithDelivery,
+        };
+        sessionStorage.setItem('checkout_details_temp', JSON.stringify(detailsToSave));
+
 
         const response = await axios.post(`${BACKEND_URL}/api/create-payment`, {
             items: orderItemsForMP,
@@ -157,17 +228,6 @@ const Checkout = () => {
         });
 
         if (response.data && response.data.init_point) {
-            // Antes de redirecionar, salvamos os detalhes do pedido na sessão
-            sessionStorage.setItem('checkout_details', JSON.stringify({
-                deliveryDetails,
-                deliveryFee,
-                payerName,
-                payerEmail,
-                items: items.map(i => ({ id: i.id, name: i.name, price: i.price, quantity: i.quantity, imageUrl: i.imageUrl })),
-                totalPrice,
-                totalWithDelivery,
-            }));
-            
             window.location.href = response.data.init_point; // Redireciona para o Mercado Pago
         } else {
             throw new Error('URL de pagamento do Mercado Pago não recebida.');
@@ -176,46 +236,15 @@ const Checkout = () => {
         console.error('Erro ao iniciar pagamento com Mercado Pago Checkout Pro:', error);
         toast.error('Ocorreu um erro ao iniciar o pagamento. Tente novamente.');
         setPaymentStatus('failed');
-    } finally {
         setIsLoading(false);
+        sessionStorage.removeItem('checkout_details_temp'); // Limpa se falhar antes do redirecionamento
     }
   };
 
-  // Efeito para recuperar detalhes do pedido após o retorno do Mercado Pago
-  useEffect(() => {
-    const query = new URLSearchParams(location.search);
-    const status = query.get('status');
-    
-    if (status && location.pathname === '/checkout') {
-        const savedDetails = sessionStorage.getItem('checkout_details');
-        if (savedDetails) {
-            // Se houver detalhes salvos, significa que o usuário retornou do MP.
-            // Recarregamos os dados para que o sendOrderToBackend tenha acesso a eles.
-            const details = JSON.parse(savedDetails);
-            
-            // Se o status for aprovado, o sendOrderToBackend será chamado pelo useEffect acima.
-            // Se for rejeitado/pendente, apenas garantimos que os dados do pagador estejam preenchidos.
-            setPayerName(details.payerName);
-            setPayerEmail(details.payerEmail);
-            
-            // Nota: O estado do React não é atualizado imediatamente, mas o sendOrderToBackend
-            // usa os valores do useCallback, que são capturados no momento da definição.
-            // Para garantir que o sendOrderToBackend use os dados recuperados, 
-            // precisamos garantir que o estado do React seja o principal.
-            // No entanto, como o `sendOrderToBackend` usa `deliveryDetails` e `deliveryFee` do `location.state`,
-            // e `items`, `totalPrice`, etc., do `useCart`, e `payerName`/`payerEmail` do estado,
-            // o fluxo atual deve funcionar se o usuário não tiver navegado para fora da página.
-            
-            // Para o caso de PIX/sucesso, o `sendOrderToBackend` é chamado no useEffect acima.
-            
-            // Limpamos os detalhes salvos após o uso
-            sessionStorage.removeItem('checkout_details');
-        }
-    }
-  }, [location.search, location.pathname]);
+  const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
+  const isCheckoutButtonDisabled = items.length === 0 || isPayerDetailsMissing || isLoading || !deliveryDetails || deliveryFee === null;
 
-
-  // Se o pagamento foi um sucesso (após retorno do MP)
+  // Renderização de sucesso
   if (paymentStatus === 'success') {
     return (
       <div className="min-h-screen flex flex-col">
@@ -239,9 +268,8 @@ const Checkout = () => {
     );
   }
 
+  // Renderização de carregamento/erro de dados
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
-    // Se o usuário retornou do MP, mas os detalhes de entrega não estão no state, 
-    // ele será redirecionado para o carrinho pelo primeiro useEffect.
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -261,9 +289,6 @@ const Checkout = () => {
       </div>
     );
   }
-
-  const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
-  const isCheckoutButtonDisabled = items.length === 0 || isPayerDetailsMissing || isLoading;
 
   return (
     <div className="min-h-screen flex flex-col">
