@@ -12,7 +12,6 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { MapPin, CreditCard, Loader2, CheckCircle2, User, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { generateUUID } from '@/lib/utils'; // Importar a função de geração de UUID
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
@@ -38,19 +37,16 @@ const Checkout = () => {
 
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
-  
-  // Novo estado para o ID do pedido
-  const [orderId, setOrderId] = useState(() => generateUUID());
 
   const totalWithDelivery = totalPrice + (deliveryFee || 0);
 
   // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
   useEffect(() => {
-    if (items.length === 0 || !deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
+    if (items.length === 0 && location.pathname !== '/pagamento/sucesso') {
       toast.info('Por favor, revise seu carrinho e endereço de entrega.');
       navigate('/carrinho');
     }
-  }, [items, navigate, deliveryDetails, deliveryFee]);
+  }, [items, navigate, deliveryDetails, deliveryFee, location.pathname]);
 
   const constructFullAddress = (details?: typeof deliveryDetails) => {
     if (!details) return '';
@@ -66,7 +62,6 @@ const Checkout = () => {
     }
 
     const orderDetails = {
-        orderId: orderId, // Inclui o orderId
         items: items,
         deliveryDetails: deliveryDetails,
         deliveryFee: deliveryFee,
@@ -79,6 +74,8 @@ const Checkout = () => {
         orderDate: new Date().toISOString(),
     };
 
+    console.log('[Checkout] Enviando pedido detalhado para o backend:', orderDetails);
+
     try {
         await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
         toast.success('Pedido confirmado e notificação enviada!');
@@ -89,26 +86,35 @@ const Checkout = () => {
         toast.error('Ocorreu um erro ao finalizar seu pedido. Por favor, entre em contato.');
         setPaymentStatus('failed');
     }
-  }, [items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, payerName, payerEmail, clearCart, orderId]);
+  }, [items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, payerName, payerEmail, clearCart]);
 
   // Efeito para lidar com o retorno do Mercado Pago na página de sucesso
   useEffect(() => {
     const query = new URLSearchParams(location.search);
     const status = query.get('status');
     const paymentId = query.get('payment_id');
+    const processedKey = `mp_processed_${paymentId}`;
 
-    if (location.pathname === '/pagamento/sucesso' && status === 'approved' && paymentId) {
-        if (paymentStatus !== 'success' && paymentStatus !== 'processing') {
+    if (location.pathname === '/checkout' && status === 'approved' && paymentId) {
+        // Verifica se o paymentId já foi processado nesta sessão
+        if (sessionStorage.getItem(processedKey) !== 'true') {
+            sessionStorage.setItem(processedKey, 'true');
             setPaymentStatus('processing');
-            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro'); // Passa paymentId
+            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro');
         }
-    } else if (location.pathname === '/pagamento/sucesso' && status === 'pending') {
+    } else if (location.pathname === '/checkout' && status === 'pending') {
         toast.info('Seu pagamento está pendente. Aguardando confirmação.');
-    } else if (location.pathname === '/pagamento/sucesso' && status === 'rejected') {
+        setPaymentStatus('failed'); // Trata como falha temporária para não mostrar sucesso
+    } else if (location.pathname === '/checkout' && status === 'rejected') {
         toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-        navigate('/checkout');
+        setPaymentStatus('failed');
     }
-  }, [location.search, location.pathname, navigate, paymentStatus, sendOrderToBackend]);
+    
+    // Limpa o status de processamento se não houver um status de retorno claro
+    if (!status && paymentStatus === 'processing') {
+        setPaymentStatus('idle');
+    }
+  }, [location.search, location.pathname, sendOrderToBackend, paymentStatus]);
 
 
   const handleCheckoutProPayment = async () => {
@@ -148,10 +154,20 @@ const Checkout = () => {
                 name: payerName,
                 email: payerEmail,
             },
-            orderId: orderId, // Envia o orderId para o backend
         });
 
         if (response.data && response.data.init_point) {
+            // Antes de redirecionar, salvamos os detalhes do pedido na sessão
+            sessionStorage.setItem('checkout_details', JSON.stringify({
+                deliveryDetails,
+                deliveryFee,
+                payerName,
+                payerEmail,
+                items: items.map(i => ({ id: i.id, name: i.name, price: i.price, quantity: i.quantity, imageUrl: i.imageUrl })),
+                totalPrice,
+                totalWithDelivery,
+            }));
+            
             window.location.href = response.data.init_point; // Redireciona para o Mercado Pago
         } else {
             throw new Error('URL de pagamento do Mercado Pago não recebida.');
@@ -165,8 +181,42 @@ const Checkout = () => {
     }
   };
 
+  // Efeito para recuperar detalhes do pedido após o retorno do Mercado Pago
+  useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    const status = query.get('status');
+    
+    if (status && location.pathname === '/checkout') {
+        const savedDetails = sessionStorage.getItem('checkout_details');
+        if (savedDetails) {
+            // Se houver detalhes salvos, significa que o usuário retornou do MP.
+            // Recarregamos os dados para que o sendOrderToBackend tenha acesso a eles.
+            const details = JSON.parse(savedDetails);
+            
+            // Se o status for aprovado, o sendOrderToBackend será chamado pelo useEffect acima.
+            // Se for rejeitado/pendente, apenas garantimos que os dados do pagador estejam preenchidos.
+            setPayerName(details.payerName);
+            setPayerEmail(details.payerEmail);
+            
+            // Nota: O estado do React não é atualizado imediatamente, mas o sendOrderToBackend
+            // usa os valores do useCallback, que são capturados no momento da definição.
+            // Para garantir que o sendOrderToBackend use os dados recuperados, 
+            // precisamos garantir que o estado do React seja o principal.
+            // No entanto, como o `sendOrderToBackend` usa `deliveryDetails` e `deliveryFee` do `location.state`,
+            // e `items`, `totalPrice`, etc., do `useCart`, e `payerName`/`payerEmail` do estado,
+            // o fluxo atual deve funcionar se o usuário não tiver navegado para fora da página.
+            
+            // Para o caso de PIX/sucesso, o `sendOrderToBackend` é chamado no useEffect acima.
+            
+            // Limpamos os detalhes salvos após o uso
+            sessionStorage.removeItem('checkout_details');
+        }
+    }
+  }, [location.search, location.pathname]);
+
+
   // Se o pagamento foi um sucesso (após retorno do MP)
-  if (paymentStatus === 'success' || location.pathname === '/pagamento/sucesso') {
+  if (paymentStatus === 'success') {
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -190,6 +240,8 @@ const Checkout = () => {
   }
 
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
+    // Se o usuário retornou do MP, mas os detalhes de entrega não estão no state, 
+    // ele será redirecionado para o carrinho pelo primeiro useEffect.
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -228,7 +280,7 @@ const Checkout = () => {
           <div className="max-w-4xl mx-auto">
             {/* Resumo do Pedido */}
             <div className="bg-card rounded-2xl shadow-lg p-6 md:p-8 mb-8">
-              <h2 className="text-2xl font-bold mb-6">Seu Pedido (ID: {orderId.substring(0, 8)}...)</h2>
+              <h2 className="text-2xl font-bold mb-6">Seu Pedido</h2>
               <div className="space-y-4">
                 {items.map(item => (
                   <div key={item.id} className="flex items-center justify-between border-b pb-4 last:border-b-0 last:pb-0">
