@@ -1,5 +1,5 @@
 // backend/src/controllers/orderController.js
-const { sendOrderConfirmationEmail } = require('../services/resendService'); // Importar o serviço de e-mail Resend
+const { sendOrderConfirmationEmail } = require('../services/resendService'); // Corrigido para usar resendService
 
 async function confirmOrder(req, res) {
     try {
