@@ -18,14 +18,16 @@ if (!emailHost || !emailPort || !emailUser || !emailPass || !orderRecipientEmail
     throw new Error(`Configuração de e-mail incompleta. Variáveis ausentes: ${missingVars.join(', ')}`);
 }
 
+const isSecure = parseInt(emailPort) === 465;
+
 // Log de depuração para confirmar as configurações lidas
-console.log(`[EmailService] Tentando conectar ao SMTP: ${emailHost}:${emailPort} (Secure: ${parseInt(emailPort) === 465}) com usuário: ${emailUser}`);
+console.log(`[EmailService] Tentando conectar ao SMTP: ${emailHost}:${emailPort} (Secure: ${isSecure}) com usuário: ${emailUser}`);
 
 const transporter = nodemailer.createTransport({
     host: emailHost,
     port: parseInt(emailPort),
-    // Define 'secure' baseado na porta: true para 465, false para outras (como 587)
-    secure: parseInt(emailPort) === 465, 
+    // Define 'secure' explicitamente
+    secure: isSecure, 
     auth: {
         user: emailUser,
         pass: emailPass,
