@@ -3,7 +3,7 @@ const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 
-async function createPaymentPreference(items, payer) {
+async function createPaymentPreference(items, payer, orderId) {
     const preference = new Preference(client);
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -23,11 +23,13 @@ async function createPaymentPreference(items, payer) {
             pending: `${frontendUrl}/checkout?status=pending`
         },
         auto_return: "approved",
-        // Adiciona a URL de notificação para receber webhooks (IPN)
         notification_url: notificationUrl,
+        // Adiciona o ID do pedido como referência externa
+        external_reference: orderId, 
     };
 
     console.log(`[MercadoPagoService] Configurando notification_url para: ${notificationUrl}`);
+    console.log(`[MercadoPagoService] Configurando external_reference para: ${orderId}`);
 
     const result = await preference.create({ body });
     return result;
