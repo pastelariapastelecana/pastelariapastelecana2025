@@ -15,56 +15,21 @@ import axios from 'axios';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
-// Definindo a interface para os detalhes do pedido salvos
-interface CartItem {
-  id: string;
-  name: string;
-  price: number;
-  quantity: number;
-  imageUrl: string;
-}
-
-interface SavedOrderDetails {
-    items: CartItem[];
-    deliveryDetails: {
-        address: string;
-        number: string;
-        neighborhood: string;
-        city: string;
-        zipCode: string;
-    };
-    deliveryFee: number;
-    totalPrice: number;
-    totalWithDelivery: number;
-    payerName: string;
-    payerEmail: string;
-}
-
 const Checkout = () => {
   const { items, totalPrice, clearCart } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Detalhes de entrega iniciais vêm do state da navegação do Carrinho
-  const initialDeliveryState = (location.state || {}) as {
-    deliveryDetails?: SavedOrderDetails['deliveryDetails'];
+  const { deliveryDetails, deliveryFee } = (location.state || {}) as {
+    deliveryDetails?: {
+      address: string;
+      number: string;
+      neighborhood: string;
+      city: string;
+      zipCode: string;
+    };
     deliveryFee?: number | null;
   };
-
-  // Usamos o estado local para armazenar os detalhes do pedido
-  const [currentOrderDetails, setCurrentOrderDetails] = useState<{
-    deliveryDetails: SavedOrderDetails['deliveryDetails'] | undefined;
-    deliveryFee: number | null;
-    items: CartItem[];
-    totalPrice: number;
-    totalWithDelivery: number;
-  }>({
-    deliveryDetails: initialDeliveryState.deliveryDetails,
-    deliveryFee: initialDeliveryState.deliveryFee === undefined ? null : initialDeliveryState.deliveryFee,
-    items: items,
-    totalPrice: totalPrice,
-    totalWithDelivery: totalPrice + (initialDeliveryState.deliveryFee || 0),
-  });
 
   const [paymentMethod, setPaymentMethod] = useState<'mercadopago'>('mercadopago');
   const [isLoading, setIsLoading] = useState(false);
@@ -73,27 +38,44 @@ const Checkout = () => {
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
 
-  const { deliveryDetails, deliveryFee, totalWithDelivery } = currentOrderDetails;
+  const totalWithDelivery = totalPrice + (deliveryFee || 0);
+
+  // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
+  useEffect(() => {
+    if (items.length === 0 || !deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
+      toast.info('Por favor, revise seu carrinho e endereço de entrega.');
+      navigate('/carrinho');
+    }
+  }, [items, navigate, deliveryDetails, deliveryFee]);
+
+  const constructFullAddress = (details?: typeof deliveryDetails) => {
+    if (!details) return '';
+    const { address, number, neighborhood, city, zipCode } = details;
+    return `${address}, ${number}, ${neighborhood}, ${city} - ${zipCode}`;
+  };
 
   // Função para enviar os detalhes do pedido para o backend
-  const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string, orderDetails: SavedOrderDetails) => {
-    if (!orderDetails.deliveryDetails || orderDetails.deliveryFee === null) {
-        console.error('sendOrderToBackend: Detalhes de entrega ou taxa de frete ausentes.');
+  const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string) => {
+    if (!deliveryDetails || deliveryFee === null) {
         toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
         return;
     }
 
-    const finalOrderDetails = {
-        ...orderDetails,
+    const orderDetails = {
+        items: items,
+        deliveryDetails: deliveryDetails,
+        deliveryFee: deliveryFee,
+        totalPrice: totalPrice,
+        totalWithDelivery: totalWithDelivery,
         paymentMethod: paymentMethodUsed,
-        paymentId: paymentId,
+        payerName: payerName,
+        payerEmail: payerEmail,
+        paymentId: paymentId, // Passa paymentId
         orderDate: new Date().toISOString(),
     };
 
-    console.log('[Checkout] Enviando pedido detalhado para o backend:', finalOrderDetails);
-
     try {
-        await axios.post(`${BACKEND_URL}/api/confirm-order`, finalOrderDetails);
+        await axios.post(`${BACKEND_URL}/api/confirm-order`, orderDetails);
         toast.success('Pedido confirmado e notificação enviada!');
         setPaymentStatus('success');
         clearCart();
@@ -102,66 +84,27 @@ const Checkout = () => {
         toast.error('Ocorreu um erro ao finalizar seu pedido. Por favor, entre em contato.');
         setPaymentStatus('failed');
     }
-  }, [clearCart]);
+  }, [items, deliveryDetails, deliveryFee, totalPrice, totalWithDelivery, payerName, payerEmail, clearCart]);
 
-  // Efeito principal para lidar com o retorno do Mercado Pago
+  // Efeito para lidar com o retorno do Mercado Pago na página de sucesso
   useEffect(() => {
     const query = new URLSearchParams(location.search);
     const status = query.get('status');
     const paymentId = query.get('payment_id');
-    const processedKey = `mp_processed_${paymentId}`;
-    const savedDetailsJson = sessionStorage.getItem('checkout_details_temp');
 
-    if (location.pathname === '/checkout' && status && paymentId) {
-        if (status === 'approved' && savedDetailsJson) {
-            if (sessionStorage.getItem(processedKey) !== 'true') {
-                sessionStorage.setItem(processedKey, 'true');
-                setPaymentStatus('processing');
-                
-                const savedDetails: SavedOrderDetails = JSON.parse(savedDetailsJson);
-                
-                // Atualiza o estado do componente com os dados recuperados para exibição
-                setCurrentOrderDetails({
-                    deliveryDetails: savedDetails.deliveryDetails,
-                    deliveryFee: savedDetails.deliveryFee,
-                    items: savedDetails.items,
-                    totalPrice: savedDetails.totalPrice,
-                    totalWithDelivery: savedDetails.totalWithDelivery,
-                });
-                setPayerName(savedDetails.payerName);
-                setPayerEmail(savedDetails.payerEmail);
-
-                // Chama a função de confirmação com os dados recuperados
-                sendOrderToBackend(paymentId, 'mercadopago_checkout_pro', savedDetails);
-            }
-        } else if (status === 'pending') {
-            toast.info('Seu pagamento está pendente. Aguardando confirmação.');
-            setPaymentStatus('failed'); 
-        } else if (status === 'rejected') {
-            toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
-            setPaymentStatus('failed');
+    if (location.pathname === '/pagamento/sucesso' && status === 'approved' && paymentId) {
+        if (paymentStatus !== 'success' && paymentStatus !== 'processing') {
+            setPaymentStatus('processing');
+            sendOrderToBackend(paymentId, 'mercadopago_checkout_pro'); // Passa paymentId
         }
-        
-        // Limpa o item temporário após o processamento do status, independentemente do resultado
-        sessionStorage.removeItem('checkout_details_temp');
+    } else if (location.pathname === '/pagamento/sucesso' && status === 'pending') {
+        toast.info('Seu pagamento está pendente. Aguardando confirmação.');
+    } else if (location.pathname === '/pagamento/sucesso' && status === 'rejected') {
+        toast.error('Seu pagamento foi recusado. Por favor, tente novamente.');
+        navigate('/checkout');
     }
-    
-    // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
-    if (currentOrderDetails.items.length === 0 && status !== 'approved' && status !== 'pending' && location.pathname === '/checkout') {
-        if (!deliveryDetails || deliveryFee === null) {
-            toast.info('Por favor, revise seu carrinho e endereço de entrega.');
-            navigate('/carrinho');
-        }
-    }
+  }, [location.search, location.pathname, navigate, paymentStatus, sendOrderToBackend]);
 
-  }, [location.search, location.pathname, sendOrderToBackend, navigate, deliveryDetails, deliveryFee, currentOrderDetails.items.length]);
-
-
-  const constructFullAddress = (details?: SavedOrderDetails['deliveryDetails']) => {
-    if (!details) return '';
-    const { address, number, neighborhood, city, zipCode } = details;
-    return `${address}, ${number}, ${neighborhood}, ${city} - ${zipCode}`;
-  };
 
   const handleCheckoutProPayment = async () => {
     if (!deliveryDetails || deliveryFee === null || !payerName.trim() || !payerEmail.trim()) {
@@ -194,18 +137,8 @@ const Checkout = () => {
             });
         }
         
-        // 1. Salva todos os detalhes do pedido na sessão ANTES de redirecionar
-        const detailsToSave: SavedOrderDetails = {
-            deliveryDetails,
-            deliveryFee,
-            payerName,
-            payerEmail,
-            items: items,
-            totalPrice: totalPrice,
-            totalWithDelivery: totalWithDelivery,
-        };
-        sessionStorage.setItem('checkout_details_temp', JSON.stringify(detailsToSave));
-
+        // Geração do external_reference
+        const externalReference = `ORDER-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const response = await axios.post(`${BACKEND_URL}/api/create-payment`, {
             items: orderItemsForMP,
@@ -213,6 +146,7 @@ const Checkout = () => {
                 name: payerName,
                 email: payerEmail,
             },
+            externalReference: externalReference, // Envia a referência externa
         });
 
         if (response.data && response.data.init_point) {
@@ -224,16 +158,13 @@ const Checkout = () => {
         console.error('Erro ao iniciar pagamento com Mercado Pago Checkout Pro:', error);
         toast.error('Ocorreu um erro ao iniciar o pagamento. Tente novamente.');
         setPaymentStatus('failed');
+    } finally {
         setIsLoading(false);
-        sessionStorage.removeItem('checkout_details_temp'); // Limpa se falhar antes do redirecionamento
     }
   };
 
-  const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
-  const isCheckoutButtonDisabled = currentOrderDetails.items.length === 0 || isPayerDetailsMissing || isLoading || !deliveryDetails || deliveryFee === null;
-
-  // Renderização de sucesso
-  if (paymentStatus === 'success') {
+  // Se o pagamento foi um sucesso (após retorno do MP)
+  if (paymentStatus === 'success' || location.pathname === '/pagamento/sucesso') {
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -256,7 +187,6 @@ const Checkout = () => {
     );
   }
 
-  // Renderização de carregamento/erro de dados
   if (!deliveryDetails || deliveryFee === undefined || deliveryFee === null) {
     return (
       <div className="min-h-screen flex flex-col">
@@ -278,6 +208,9 @@ const Checkout = () => {
     );
   }
 
+  const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
+  const isCheckoutButtonDisabled = items.length === 0 || isPayerDetailsMissing || isLoading;
+
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
@@ -295,7 +228,7 @@ const Checkout = () => {
             <div className="bg-card rounded-2xl shadow-lg p-6 md:p-8 mb-8">
               <h2 className="text-2xl font-bold mb-6">Seu Pedido</h2>
               <div className="space-y-4">
-                {currentOrderDetails.items.map(item => (
+                {items.map(item => (
                   <div key={item.id} className="flex items-center justify-between border-b pb-4 last:border-b-0 last:pb-0">
                     <div className="flex items-center gap-4">
                       <img src={item.imageUrl} alt={item.name} className="w-16 h-16 object-cover rounded-md" />
@@ -317,7 +250,7 @@ const Checkout = () => {
                 )}
                 <div className="flex justify-between text-lg">
                   <span className="text-muted-foreground">Subtotal:</span>
-                  <span className="font-medium">R$ {currentOrderDetails.totalPrice.toFixed(2)}</span>
+                  <span className="font-medium">R$ {totalPrice.toFixed(2)}</span>
                 </div>
               </div>
             </div>
@@ -393,7 +326,7 @@ const Checkout = () => {
               <div className="space-y-4 mb-6">
                 <div className="flex justify-between text-lg">
                   <span className="text-muted-foreground">Subtotal:</span>
-                  <span className="font-medium">R$ {currentOrderDetails.totalPrice.toFixed(2)}</span>
+                  <span className="font-medium">R$ {totalPrice.toFixed(2)}</span>
                 </div>
                 {deliveryFee !== null && (
                   <div className="flex justify-between text-lg">
