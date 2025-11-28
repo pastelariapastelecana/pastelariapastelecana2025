@@ -16,8 +16,16 @@ import axios from 'axios';
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
 // Definindo a interface para os detalhes do pedido salvos
+interface CartItem {
+  id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  imageUrl: string;
+}
+
 interface SavedOrderDetails {
-    items: typeof items;
+    items: CartItem[];
     deliveryDetails: {
         address: string;
         number: string;
@@ -43,11 +51,11 @@ const Checkout = () => {
     deliveryFee?: number | null;
   };
 
-  // Usamos o estado local para armazenar os detalhes do pedido, que podem ser recuperados da sessão
+  // Usamos o estado local para armazenar os detalhes do pedido
   const [currentOrderDetails, setCurrentOrderDetails] = useState<{
     deliveryDetails: SavedOrderDetails['deliveryDetails'] | undefined;
     deliveryFee: number | null;
-    items: typeof items;
+    items: CartItem[];
     totalPrice: number;
     totalWithDelivery: number;
   }>({
@@ -67,57 +75,10 @@ const Checkout = () => {
 
   const { deliveryDetails, deliveryFee, totalWithDelivery } = currentOrderDetails;
 
-  // Efeito para lidar com a perda de estado após o redirecionamento
-  useEffect(() => {
-    const query = new URLSearchParams(location.search);
-    const status = query.get('status');
-    
-    if (status && !deliveryDetails) {
-        const savedDetailsJson = sessionStorage.getItem('checkout_details');
-        if (savedDetailsJson) {
-            const savedDetails: SavedOrderDetails = JSON.parse(savedDetailsJson);
-            
-            // Atualiza o estado local com os dados recuperados
-            setCurrentOrderDetails({
-                deliveryDetails: savedDetails.deliveryDetails,
-                deliveryFee: savedDetails.deliveryFee,
-                items: savedDetails.items,
-                totalPrice: savedDetails.totalPrice,
-                totalWithDelivery: savedDetails.totalWithDelivery,
-            });
-            setPayerName(savedDetails.payerName);
-            setPayerEmail(savedDetails.payerEmail);
-            
-            // Limpa os dados da sessão após a recuperação
-            sessionStorage.removeItem('checkout_details');
-        }
-    }
-  }, [location.search, deliveryDetails]);
-
-
-  // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
-  useEffect(() => {
-    // Verifica se estamos na página de checkout e se os dados essenciais estão faltando
-    if (location.pathname === '/checkout' && (currentOrderDetails.items.length === 0 || !deliveryDetails || deliveryFee === null)) {
-      // Se o status for 'approved' ou 'pending', não redireciona imediatamente, pois pode estar processando
-      const query = new URLSearchParams(location.search);
-      const status = query.get('status');
-      if (status !== 'approved' && status !== 'pending') {
-        toast.info('Por favor, revise seu carrinho e endereço de entrega.');
-        navigate('/carrinho');
-      }
-    }
-  }, [currentOrderDetails.items.length, navigate, deliveryDetails, deliveryFee, location.pathname]);
-
-  const constructFullAddress = (details?: SavedOrderDetails['deliveryDetails']) => {
-    if (!details) return '';
-    const { address, number, neighborhood, city, zipCode } = details;
-    return `${address}, ${number}, ${neighborhood}, ${city} - ${zipCode}`;
-  };
-
   // Função para enviar os detalhes do pedido para o backend
   const sendOrderToBackend = useCallback(async (paymentId: string, paymentMethodUsed: string, orderDetails: SavedOrderDetails) => {
     if (!orderDetails.deliveryDetails || orderDetails.deliveryFee === null) {
+        console.error('sendOrderToBackend: Detalhes de entrega ou taxa de frete ausentes.');
         toast.error('Detalhes de entrega ou taxa de frete ausentes. Por favor, retorne ao carrinho.');
         return;
     }
@@ -143,22 +104,34 @@ const Checkout = () => {
     }
   }, [clearCart]);
 
-  // Efeito para lidar com o retorno do Mercado Pago na página de sucesso
+  // Efeito principal para lidar com o retorno do Mercado Pago
   useEffect(() => {
     const query = new URLSearchParams(location.search);
     const status = query.get('status');
     const paymentId = query.get('payment_id');
     const processedKey = `mp_processed_${paymentId}`;
+    const savedDetailsJson = sessionStorage.getItem('checkout_details_temp');
 
     if (location.pathname === '/checkout' && status && paymentId) {
-        const savedDetailsJson = sessionStorage.getItem('checkout_details_temp');
-        
         if (status === 'approved' && savedDetailsJson) {
             if (sessionStorage.getItem(processedKey) !== 'true') {
                 sessionStorage.setItem(processedKey, 'true');
                 setPaymentStatus('processing');
                 
                 const savedDetails: SavedOrderDetails = JSON.parse(savedDetailsJson);
+                
+                // Atualiza o estado do componente com os dados recuperados para exibição
+                setCurrentOrderDetails({
+                    deliveryDetails: savedDetails.deliveryDetails,
+                    deliveryFee: savedDetails.deliveryFee,
+                    items: savedDetails.items,
+                    totalPrice: savedDetails.totalPrice,
+                    totalWithDelivery: savedDetails.totalWithDelivery,
+                });
+                setPayerName(savedDetails.payerName);
+                setPayerEmail(savedDetails.payerEmail);
+
+                // Chama a função de confirmação com os dados recuperados
                 sendOrderToBackend(paymentId, 'mercadopago_checkout_pro', savedDetails);
             }
         } else if (status === 'pending') {
@@ -169,11 +142,26 @@ const Checkout = () => {
             setPaymentStatus('failed');
         }
         
-        // Limpa o item temporário após o processamento do status
+        // Limpa o item temporário após o processamento do status, independentemente do resultado
         sessionStorage.removeItem('checkout_details_temp');
     }
-  }, [location.search, location.pathname, sendOrderToBackend]);
+    
+    // Redireciona se o carrinho estiver vazio ou detalhes de entrega ausentes
+    if (currentOrderDetails.items.length === 0 && status !== 'approved' && status !== 'pending' && location.pathname === '/checkout') {
+        if (!deliveryDetails || deliveryFee === null) {
+            toast.info('Por favor, revise seu carrinho e endereço de entrega.');
+            navigate('/carrinho');
+        }
+    }
 
+  }, [location.search, location.pathname, sendOrderToBackend, navigate, deliveryDetails, deliveryFee, currentOrderDetails.items.length]);
+
+
+  const constructFullAddress = (details?: SavedOrderDetails['deliveryDetails']) => {
+    if (!details) return '';
+    const { address, number, neighborhood, city, zipCode } = details;
+    return `${address}, ${number}, ${neighborhood}, ${city} - ${zipCode}`;
+  };
 
   const handleCheckoutProPayment = async () => {
     if (!deliveryDetails || deliveryFee === null || !payerName.trim() || !payerEmail.trim()) {
@@ -242,7 +230,7 @@ const Checkout = () => {
   };
 
   const isPayerDetailsMissing = !payerName.trim() || !payerEmail.trim();
-  const isCheckoutButtonDisabled = items.length === 0 || isPayerDetailsMissing || isLoading || !deliveryDetails || deliveryFee === null;
+  const isCheckoutButtonDisabled = currentOrderDetails.items.length === 0 || isPayerDetailsMissing || isLoading || !deliveryDetails || deliveryFee === null;
 
   // Renderização de sucesso
   if (paymentStatus === 'success') {
@@ -307,7 +295,7 @@ const Checkout = () => {
             <div className="bg-card rounded-2xl shadow-lg p-6 md:p-8 mb-8">
               <h2 className="text-2xl font-bold mb-6">Seu Pedido</h2>
               <div className="space-y-4">
-                {items.map(item => (
+                {currentOrderDetails.items.map(item => (
                   <div key={item.id} className="flex items-center justify-between border-b pb-4 last:border-b-0 last:pb-0">
                     <div className="flex items-center gap-4">
                       <img src={item.imageUrl} alt={item.name} className="w-16 h-16 object-cover rounded-md" />
@@ -329,7 +317,7 @@ const Checkout = () => {
                 )}
                 <div className="flex justify-between text-lg">
                   <span className="text-muted-foreground">Subtotal:</span>
-                  <span className="font-medium">R$ {totalPrice.toFixed(2)}</span>
+                  <span className="font-medium">R$ {currentOrderDetails.totalPrice.toFixed(2)}</span>
                 </div>
               </div>
             </div>
@@ -405,7 +393,7 @@ const Checkout = () => {
               <div className="space-y-4 mb-6">
                 <div className="flex justify-between text-lg">
                   <span className="text-muted-foreground">Subtotal:</span>
-                  <span className="font-medium">R$ {totalPrice.toFixed(2)}</span>
+                  <span className="font-medium">R$ {currentOrderDetails.totalPrice.toFixed(2)}</span>
                 </div>
                 {deliveryFee !== null && (
                   <div className="flex justify-between text-lg">
