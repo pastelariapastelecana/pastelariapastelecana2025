@@ -8,9 +8,6 @@ async function createPaymentPreference(items, payer) {
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001'; // Usar BACKEND_URL
-    const notificationUrl = `${backendUrl}/api/webhooks/mercadopago`;
-
-    console.log(`[MercadoPagoService] Usando notification_url: ${notificationUrl}`); // LOG DE DEBUG
 
     const body = {
         items: items,
@@ -24,7 +21,8 @@ async function createPaymentPreference(items, payer) {
             pending: `${frontendUrl}/checkout?status=pending`
         },
         auto_return: "approved",
-        notification_url: notificationUrl, // Garantindo que o campo está aqui
+        // Adiciona a URL de notificação para que o Mercado Pago envie o status do pagamento
+        notification_url: `${backendUrl}/api/webhooks/mercadopago`,
     };
 
     const result = await preference.create({ body });
